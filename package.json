@@ -1,0 +1,24 @@
+{
+  "name": "road-weather",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Compare routes, days and departure times for a drive to avoid black ice, snow and sleet — using Yr, SMHI and Open-Meteo forecasts.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^4.3.0",
+    "vite": "^8.0.12"
+  }
+}
