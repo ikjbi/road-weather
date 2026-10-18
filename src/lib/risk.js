@@ -9,11 +9,11 @@
 const HOUR = 3600_000
 
 export const LEVELS = [
-  { max: 1.5, label: 'Good', color: '#22c55e' },
-  { max: 3.5, label: 'Watch', color: '#a3e635' },
-  { max: 5.5, label: 'Caution', color: '#facc15' },
-  { max: 7.5, label: 'Dangerous', color: '#f97316' },
-  { max: 11, label: 'Severe', color: '#ef4444' },
+  { max: 1.5, label: 'Good', color: '#22c55e', meaning: 'Above freezing and mostly dry. Normal driving.' },
+  { max: 3.5, label: 'Watch', color: '#a3e635', meaning: 'Cold or near freezing in places. Slippery patches possible, keep an eye out.' },
+  { max: 5.5, label: 'Caution', color: '#facc15', meaning: 'Frost, below-zero roads or fog likely somewhere. Winter tyres and extra care.' },
+  { max: 7.5, label: 'Dangerous', color: '#f97316', meaning: 'Snow, sleet or a wet road refreezing (black ice) likely. Consider another day or time.' },
+  { max: 11, label: 'Severe', color: '#ef4444', meaning: 'Freezing rain, rain on frozen roads or heavy snow. Avoid driving if you can.' },
 ]
 
 export function level(score) {

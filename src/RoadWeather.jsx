@@ -215,6 +215,39 @@ function bestTimes(cells, n = 3, gapMin = 30) {
   return picked
 }
 
+// What the colours and numbers mean, shown under the route table.
+function ScoreKey() {
+  return (
+    <div className="mt-4 rounded-2xl bg-slate-700/40 border border-white/10 p-4 text-sm">
+      <h3 className="font-semibold mb-1">What the colours and numbers mean</h3>
+      <p className="text-slate-300 mb-3">
+        Every trip gets a risk score from <span className="text-white">0</span> (no concerns) to{' '}
+        <span className="text-white">10</span> (worst). Each place on the route is scored for the time you'll pass
+        it, and the trip score sits halfway between the worst place and the average of all of them, so one icy
+        stretch is enough to pull a trip down. Lower is better.
+      </p>
+      <ul className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        {LEVELS.map((l, i) => (
+          <li key={l.label} className="flex gap-2.5">
+            <span className="w-3 h-3 mt-1 rounded-full shrink-0" style={{ background: l.color }} />
+            <span>
+              <span className="font-semibold" style={{ color: l.color }}>{l.label}</span>{' '}
+              <span className="text-slate-400 text-xs">
+                {i === 0 ? `0–${l.max}` : i === LEVELS.length - 1 ? `over ${LEVELS[i - 1].max}` : `${LEVELS[i - 1].max}–${l.max}`}
+              </span>
+              <span className="block text-xs text-slate-300 mt-0.5">{l.meaning}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-slate-400 mt-3">
+        Routes are lettered A, B, C with matching line colours on the map; the places along the selected route are
+        numbered 1, 2, 3… in driving order and coloured by their own score.
+      </p>
+    </div>
+  )
+}
+
 function hazards(stops, minScore) {
   const set = new Set(
     stops.flatMap(s => Object.values(s.bySource).flatMap(x => (x && x.score >= minScore ? x.reasons : []))),
@@ -673,6 +706,7 @@ export default function RoadWeather() {
                 </tbody>
               </table>
             </div>
+            <ScoreKey />
           </section>
 
           {/* Best departure times on the one day */}
