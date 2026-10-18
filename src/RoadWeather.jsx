@@ -44,7 +44,8 @@ const fmtTime = t => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', 
 const fmtWeekdayTime = t =>
   new Date(t).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
 const fmtDuration = sec => `${Math.floor(sec / 3600)} h ${String(Math.round((sec % 3600) / 60)).padStart(2, '0')} min`
-const fmtHour = h => `${String(h).padStart(2, '0')}:00`
+const fmtMin = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, i) => i * 15) // 00:00 … 23:45
 const listNames = names =>
   names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
 
@@ -61,6 +62,7 @@ function LocationInput({ label, value, onChange, onText, active, onActivate }) {
   const [state, setState] = useState(null) // 'searching' | 'none' | 'error'
   const timer = useRef(null)
   const abort = useRef(null)
+  const input = useRef(null)
 
   async function search(q) {
     abort.current?.abort()
@@ -70,7 +72,8 @@ function LocationInput({ label, value, onChange, onText, active, onActivate }) {
       const hits = await searchPlaces(q, abort.current.signal)
       setResults(hits)
       setState(hits.length ? null : 'none')
-      setOpen(true)
+      // Results can land after you've moved on; only pop up while focused.
+      setOpen(document.activeElement === input.current)
       return hits
     } catch (e) {
       if (e.name !== 'AbortError') setState('error')
@@ -92,11 +95,13 @@ function LocationInput({ label, value, onChange, onText, active, onActivate }) {
   }
 
   async function onKeyDown(e) {
+    if (e.key === 'Escape') setOpen(false)
     if (e.key !== 'Enter') return
     e.preventDefault()
     clearTimeout(timer.current)
     const hits = results.length ? results : await search(text)
     if (hits[0]) onChange(hits[0])
+    setOpen(false)
   }
 
   return (
@@ -114,6 +119,7 @@ function LocationInput({ label, value, onChange, onText, active, onActivate }) {
         </button>
       </div>
       <input
+        ref={input}
         value={text}
         onChange={onType}
         onKeyDown={onKeyDown}
@@ -177,26 +183,36 @@ function RouteTag({ index }) {
   )
 }
 
-// Every candidate day × departure hour for one route.
-function buildGrid(trip, weather, { days, selectedDays, earliest, latest, fetchedAt, opts }) {
-  const hours = []
-  for (let h = earliest; h <= latest; h++) hours.push(h)
-  const rows = days
-    .filter(d => selectedDays.includes(dayKey(d)))
-    .map(d => {
-      const cells = hours.map(h => {
-        const dep = new Date(d)
-        dep.setHours(h)
-        if (dep.getTime() < fetchedAt - 3600_000) return { hour: h, past: true }
-        return { hour: h, ...scoreTrip(trip.waypoints, weather, dep.getTime(), opts) }
-      })
-      const valid = cells.filter(c => c.score != null)
-      const best = valid.length ? valid.reduce((a, b) => (b.score < a.score ? b : a)) : null
-      return { day: dayKey(d), date: d, cells, best, allPast: cells.every(c => c.past) }
+// Every candidate day × departure time for one route. Times are minutes
+// after midnight, every `step` minutes from `earliest` to `latest`.
+function buildGrid(trip, weather, { dayList, earliest, latest, step, fetchedAt, opts }) {
+  const slots = []
+  for (let m = earliest; m <= latest; m += step) slots.push(m)
+  const rows = dayList.map(d => {
+    const cells = slots.map(m => {
+      const dep = new Date(d)
+      dep.setHours(0, m)
+      if (dep.getTime() < fetchedAt - 3600_000) return { min: m, past: true }
+      return { min: m, ...scoreTrip(trip.waypoints, weather, dep.getTime(), opts) }
     })
+    const valid = cells.filter(c => c.score != null)
+    const best = valid.length ? valid.reduce((a, b) => (b.score < a.score ? b : a)) : null
+    return { day: dayKey(d), date: d, cells, best, allPast: cells.every(c => c.past) }
+  })
   const withBest = rows.filter(r => r.best)
   const best = withBest.length ? withBest.reduce((a, b) => (b.best.score < a.best.score ? b : a)) : null
-  return { hours, rows, best }
+  return { slots, rows, best }
+}
+
+// The lowest-risk departures, at least `gapMin` apart so they're real
+// alternatives rather than 07:00, 07:15, 07:30.
+function bestTimes(cells, n = 3, gapMin = 30) {
+  const picked = []
+  for (const c of cells.filter(c => c.score != null).sort((a, b) => a.score - b.score || a.min - b.min)) {
+    if (picked.every(p => Math.abs(p.min - c.min) >= gapMin)) picked.push(c)
+    if (picked.length === n) break
+  }
+  return picked
 }
 
 function hazards(stops, minScore) {
@@ -220,8 +236,10 @@ export default function RoadWeather() {
   const [toText, setToText] = useState(saved.to?.label ?? '')
   const [pickMode, setPickMode] = useState(null)
   const [selectedDays, setSelectedDays] = useState(() => days.slice(0, 3).map(dayKey))
-  const [earliest, setEarliest] = useState(saved.earliest ?? 6)
-  const [latest, setLatest] = useState(saved.latest ?? 14)
+  const [mode, setMode] = useState(saved.mode ?? 'days') // 'days' | 'single'
+  const [singleDay, setSingleDay] = useState(() => dayKey(days[1]))
+  const [earliest, setEarliest] = useState(saved.earliestMin ?? 6 * 60)
+  const [latest, setLatest] = useState(saved.latestMin ?? 14 * 60)
   const [spacing, setSpacing] = useState(saved.spacing ?? 40)
   const [pace, setPace] = useState(saved.pace ?? 1.1)
   const [breakMin, setBreakMin] = useState(saved.breakMin ?? 15)
@@ -234,13 +252,13 @@ export default function RoadWeather() {
   const [trips, setTrips] = useState(null) // [{ route, waypoints, via }]
   const [weathers, setWeathers] = useState(null) // one per trip
   const [fetchedAt, setFetchedAt] = useState(0)
-  const [selected, setSelected] = useState(null) // { route, day, hour }
+  const [selected, setSelected] = useState(null) // { route, day, min }
   const [focusStop, setFocusStop] = useState(null)
   const runId = useRef(0)
 
   useEffect(() => {
-    save({ from, to, earliest, latest, spacing, pace, breakMin, summerTires, sources })
-  }, [from, to, earliest, latest, spacing, pace, breakMin, summerTires, sources])
+    save({ from, to, mode, earliestMin: earliest, latestMin: latest, spacing, pace, breakMin, summerTires, sources })
+  }, [from, to, mode, earliest, latest, spacing, pace, breakMin, summerTires, sources])
 
   const chooseFrom = useCallback(place => {
     setFrom(place)
@@ -322,17 +340,25 @@ export default function RoadWeather() {
 
   const grids = useMemo(() => {
     if (!trips || !weathers || !sources.length) return null
-    const ctx = { days, selectedDays, earliest, latest, fetchedAt, opts: { summerTires, pace, breakMin, sources } }
+    const single = mode === 'single'
+    const ctx = {
+      dayList: days.filter(d => (single ? dayKey(d) === singleDay : selectedDays.includes(dayKey(d)))),
+      earliest,
+      latest,
+      step: single ? 15 : 60, // one day: every quarter; several days: hourly
+      fetchedAt,
+      opts: { summerTires, pace, breakMin, sources },
+    }
     return trips.map((t, i) => buildGrid(t, weathers[i], ctx))
-  }, [trips, weathers, days, selectedDays, earliest, latest, fetchedAt, summerTires, pace, breakMin, sources])
+  }, [trips, weathers, mode, days, singleDay, selectedDays, earliest, latest, fetchedAt, summerTires, pace, breakMin, sources])
 
-  // Best route + day + hour overall.
+  // Best route + day + departure time overall.
   const overall = useMemo(() => {
     if (!grids) return null
     let best = null
     grids.forEach((g, route) => {
       if (g.best && (!best || g.best.best.score < best.score))
-        best = { route, day: g.best.day, hour: g.best.best.hour, score: g.best.best.score }
+        best = { route, day: g.best.day, min: g.best.best.min, score: g.best.best.score }
     })
     return best
   }, [grids])
@@ -350,7 +376,7 @@ export default function RoadWeather() {
   const active = useMemo(() => {
     if (!grid || !pick) return null
     const row = grid.rows.find(r => r.day === pick.day) ?? ranked[0]
-    const cell = row?.cells.find(c => c.hour === pick.hour) ?? row?.best
+    const cell = row?.cells.find(c => c.min === pick.min) ?? row?.best
     return cell?.stops ? { row, cell } : null
   }, [grid, pick, ranked])
 
@@ -369,8 +395,8 @@ export default function RoadWeather() {
         ? 'Now click the map to set the destination (or type it)'
         : null
 
-  const select = (route, day, hour) => {
-    setSelected({ route, day, hour })
+  const select = (route, day, min) => {
+    setSelected({ route, day, min })
     setFocusStop(null)
   }
 
@@ -381,7 +407,7 @@ export default function RoadWeather() {
         <p className="text-slate-300 mt-2 max-w-2xl">
           Pick where you start and where you're going. The planner finds up to three routes, checks the forecast for
           the hour you'll pass each town along them, and compares routes, days and departure times so you can dodge
-          black ice, snow and sleet.
+          black ice, snow and sleet. Already know the day? Switch to One day to find the best time to leave.
         </p>
       </header>
 
@@ -421,16 +447,33 @@ export default function RoadWeather() {
           />
 
           <div>
-            <div className="text-xs uppercase tracking-wider text-slate-300 mb-2">Days to compare</div>
+            <div className="flex rounded-xl bg-slate-800/70 border border-white/10 p-1 mb-3 text-sm">
+              {[
+                ['days', 'Compare days'],
+                ['single', 'One day'],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setMode(id)}
+                  className={`flex-1 rounded-lg py-1.5 transition-colors ${mode === id ? 'bg-sky-400 text-slate-900 font-semibold' : 'text-slate-300 hover:text-white'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="text-xs uppercase tracking-wider text-slate-300 mb-2">
+              {mode === 'single' ? 'Travel day' : 'Days to compare'}
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {days.map((d, i) => {
                 const k = dayKey(d)
-                const on = selectedDays.includes(k)
+                const on = mode === 'single' ? singleDay === k : selectedDays.includes(k)
                 return (
                   <button
                     key={k}
                     type="button"
-                    onClick={() => toggleDay(k)}
+                    onClick={() => (mode === 'single' ? setSingleDay(k) : toggleDay(k))}
                     className={`px-2.5 py-1 rounded-lg text-sm border transition-colors ${
                       on ? 'bg-sky-400 text-slate-900 border-sky-400' : 'border-white/15 text-slate-200 hover:border-white/40'
                     }`}
@@ -443,19 +486,33 @@ export default function RoadWeather() {
             <p className="text-xs text-slate-400 mt-1.5">Yr and SMHI reach about 9 days ahead; Open-Meteo a bit further.</p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-sm">
-              <span className="block text-xs uppercase tracking-wider text-slate-300 mb-1">Leave earliest</span>
-              <select value={earliest} onChange={e => setEarliest(+e.target.value)} className="w-full rounded-lg bg-slate-800/70 border border-white/10 px-2 py-2">
-                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{fmtHour(h)}</option>)}
-              </select>
-            </label>
-            <label className="text-sm">
-              <span className="block text-xs uppercase tracking-wider text-slate-300 mb-1">Leave latest</span>
-              <select value={latest} onChange={e => setLatest(Math.max(+e.target.value, earliest))} className="w-full rounded-lg bg-slate-800/70 border border-white/10 px-2 py-2">
-                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h} disabled={h < earliest}>{fmtHour(h)}</option>)}
-              </select>
-            </label>
+          <div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-sm">
+                <span className="block text-xs uppercase tracking-wider text-slate-300 mb-1">Leave earliest</span>
+                <select
+                  value={earliest}
+                  onChange={e => {
+                    setEarliest(+e.target.value)
+                    setLatest(l => Math.max(l, +e.target.value))
+                  }}
+                  className="w-full rounded-lg bg-slate-800/70 border border-white/10 px-2 py-2"
+                >
+                  {TIME_OPTIONS.map(m => <option key={m} value={m}>{fmtMin(m)}</option>)}
+                </select>
+              </label>
+              <label className="text-sm">
+                <span className="block text-xs uppercase tracking-wider text-slate-300 mb-1">Leave latest</span>
+                <select value={latest} onChange={e => setLatest(+e.target.value)} className="w-full rounded-lg bg-slate-800/70 border border-white/10 px-2 py-2">
+                  {TIME_OPTIONS.map(m => <option key={m} value={m} disabled={m < earliest}>{fmtMin(m)}</option>)}
+                </select>
+              </label>
+            </div>
+            <p className="text-xs text-slate-400 mt-1.5">
+              {mode === 'single'
+                ? 'Every departure in this window is checked, 15 minutes apart.'
+                : 'Departures are checked every hour; use One day for 15-minute steps.'}
+            </p>
           </div>
 
           <label className="flex items-center gap-3 cursor-pointer select-none">
@@ -526,7 +583,7 @@ export default function RoadWeather() {
             to={to}
             routes={trips?.map(t => t.route)}
             selectedRoute={routeIdx}
-            onSelectRoute={i => select(i, grids?.[i]?.best?.day, grids?.[i]?.best?.best.hour)}
+            onSelectRoute={i => select(i, grids?.[i]?.best?.day, grids?.[i]?.best?.best.min)}
             stops={mapStops}
             onPick={onPick}
             selectedIndex={focusStop}
@@ -572,7 +629,7 @@ export default function RoadWeather() {
                     return (
                       <tr
                         key={i}
-                        onClick={() => g.best && select(i, g.best.day, g.best.best.hour)}
+                        onClick={() => g.best && select(i, g.best.day, g.best.best.min)}
                         className={`cursor-pointer ${isActive ? 'bg-white/5' : 'hover:bg-white/5'}`}
                       >
                         <td className="px-4 py-3">
@@ -598,12 +655,12 @@ export default function RoadWeather() {
                                 type="button"
                                 onClick={e => {
                                   e.stopPropagation()
-                                  select(i, r.day, r.best.hour)
+                                  select(i, r.day, r.best.min)
                                 }}
                                 className="text-left"
                               >
                                 <ScoreBadge score={r.best.score} />
-                                <div className="text-xs text-slate-400">leave {fmtHour(r.best.hour)}</div>
+                                <div className="text-xs text-slate-400">leave {fmtMin(r.best.min)}</div>
                               </button>
                             ) : (
                               <span className="text-slate-500 text-xs">{r.allPast ? 'Too late today' : 'No forecast'}</span>
@@ -618,7 +675,65 @@ export default function RoadWeather() {
             </div>
           </section>
 
-          {/* Day ranking for the chosen route */}
+          {/* Best departure times on the one day */}
+          {mode === 'single' && (() => {
+            const row = grid.rows[0]
+            const top = row ? bestTimes(row.cells) : []
+            const first = row?.cells.find(c => c.score != null)
+            return (
+              <section className="mt-10">
+                <h2 className="text-xl font-semibold mb-1 flex items-center gap-2.5">
+                  <RouteTag index={routeIdx} /> Best time to leave {trips.length > 1 && <span className="text-slate-300 font-normal">· {routeName(routeIdx)}</span>}
+                </h2>
+                {!top.length ? (
+                  <p className="text-slate-300 mt-3">
+                    {row?.allPast ? 'That window has already passed today.' : 'No forecast covers that day yet.'}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm text-slate-300 mb-4">
+                      {fmtDay(row.date)}, leaving between {fmtMin(earliest)} and {fmtMin(latest)}.
+                      {first && top[0].min !== first.min && top[0].score < first.score - 0.25 && (
+                        <> Leaving at <span className="text-white">{fmtMin(top[0].min)}</span> instead of {fmtMin(first.min)} brings the risk down from {level(first.score).label.toLowerCase()} ({first.score.toFixed(1)}) to {level(top[0].score).label.toLowerCase()} ({top[0].score.toFixed(1)}).</>
+                      )}
+                      {first && top[0].score >= first.score - 0.25 && ' It makes little difference when in this window you leave.'}
+                    </p>
+                    <div className="grid sm:grid-cols-3 gap-4">
+                      {top.map((c, i) => {
+                        const worst = c.stops.reduce((a, b) => ((b.combined ?? -1) > (a.combined ?? -1) ? b : a))
+                        const reasons = hazards(c.stops, 4)
+                        const isActive = active?.row.day === row.day && active?.cell.min === c.min
+                        return (
+                          <button
+                            key={c.min}
+                            type="button"
+                            onClick={() => select(routeIdx, row.day, c.min)}
+                            className={`text-left rounded-2xl p-5 border transition-colors ${
+                              isActive ? 'bg-slate-700 border-sky-400' : 'bg-slate-700/60 border-white/10 hover:border-white/30'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-2xl font-semibold">{fmtMin(c.min)}</span>
+                              {i === 0 && <span className="text-xs bg-sky-400 text-slate-900 font-semibold px-2 py-0.5 rounded-full">Best</span>}
+                            </div>
+                            <div className="mt-1 text-sm text-slate-300">Arrive {fmtWeekdayTime(c.stops.at(-1).eta)}</div>
+                            <div className="mt-3"><ScoreBadge score={c.score} /></div>
+                            <div className="mt-2 text-sm text-slate-300">
+                              Worst stretch: <span className="text-white">{worst.name ?? `km ${Math.round(worst.km)}`}</span> ({level(worst.combined ?? 0).label.toLowerCase()})
+                            </div>
+                            {reasons.length > 0 && <div className="mt-2 text-xs text-slate-400">{reasons.slice(0, 4).join(' · ')}</div>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </section>
+            )
+          })()}
+
+          {mode === 'days' && (
+          // Day ranking for the chosen route
           <section className="mt-10">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2.5">
               <RouteTag index={routeIdx} /> Best day to drive {trips.length > 1 && <span className="text-slate-300 font-normal">· {routeName(routeIdx)}</span>}
@@ -630,12 +745,12 @@ export default function RoadWeather() {
                 {ranked.map((r, i) => {
                   const worst = r.best.stops.reduce((a, b) => ((b.combined ?? -1) > (a.combined ?? -1) ? b : a))
                   const reasons = hazards(r.best.stops, 4)
-                  const isActive = active?.row.day === r.day && active?.cell.hour === r.best.hour
+                  const isActive = active?.row.day === r.day && active?.cell.min === r.best.min
                   return (
                     <button
                       key={r.day}
                       type="button"
-                      onClick={() => select(routeIdx, r.day, r.best.hour)}
+                      onClick={() => select(routeIdx, r.day, r.best.min)}
                       className={`text-left rounded-2xl p-5 border transition-colors ${
                         isActive ? 'bg-slate-700 border-sky-400' : 'bg-slate-700/60 border-white/10 hover:border-white/30'
                       }`}
@@ -645,7 +760,7 @@ export default function RoadWeather() {
                         {i === 0 && <span className="text-xs bg-sky-400 text-slate-900 font-semibold px-2 py-0.5 rounded-full">Best</span>}
                       </div>
                       <div className="mt-1 text-sm text-slate-300">
-                        Leave {fmtHour(r.best.hour)} · arrive {fmtTime(r.best.stops.at(-1).eta)}
+                        Leave {fmtMin(r.best.min)} · arrive {fmtTime(r.best.stops.at(-1).eta)}
                       </div>
                       <div className="mt-3"><ScoreBadge score={r.best.score} /></div>
                       <div className="mt-2 text-sm text-slate-300">
@@ -658,18 +773,21 @@ export default function RoadWeather() {
               </div>
             )}
           </section>
+          )}
 
-          {/* Day × departure hour heatmap */}
+          {/* Day × departure time heatmap */}
           <section className="mt-10">
             <h2 className="text-xl font-semibold mb-1">Departure times</h2>
-            <p className="text-sm text-slate-300 mb-4">Each square is the whole trip on route {letter(routeIdx)} if you leave at that hour. Click one to see the details.</p>
+            <p className="text-sm text-slate-300 mb-4">Each square is the whole trip on route {letter(routeIdx)} if you leave at that time. Click one to see the details.</p>
             <div className="overflow-x-auto rounded-2xl bg-slate-700/60 border border-white/10 p-4">
               <table className="border-separate" style={{ borderSpacing: 4 }}>
                 <thead>
                   <tr>
                     <th />
-                    {grid.hours.map(h => (
-                      <th key={h} className="text-xs font-normal text-slate-300 w-10">{String(h).padStart(2, '0')}</th>
+                    {grid.slots.map(m => (
+                      <th key={m} className={`text-xs font-normal text-slate-300 ${mode === 'single' ? 'w-12' : 'w-10'}`}>
+                        {mode === 'single' ? fmtMin(m) : fmtMin(m).replace(/:00$/, '')}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -678,16 +796,16 @@ export default function RoadWeather() {
                     <tr key={r.day}>
                       <td className="text-sm pr-3 whitespace-nowrap text-slate-200">{fmtDay(r.date)}</td>
                       {r.cells.map(c => {
-                        const isActive = active?.row.day === r.day && active?.cell.hour === c.hour
+                        const isActive = active?.row.day === r.day && active?.cell.min === c.min
                         const color = c.score != null ? level(c.score).color : null
                         return (
-                          <td key={c.hour}>
+                          <td key={c.min}>
                             <button
                               type="button"
                               disabled={c.score == null}
-                              onClick={() => select(routeIdx, r.day, c.hour)}
+                              onClick={() => select(routeIdx, r.day, c.min)}
                               title={c.score != null ? `${level(c.score).label} (${c.score.toFixed(1)})` : c.past ? 'In the past' : 'No forecast yet'}
-                              className={`w-10 h-9 rounded-md text-[11px] font-semibold text-slate-900 ${isActive ? 'ring-2 ring-white' : ''}`}
+                              className={`${mode === 'single' ? 'w-12' : 'w-10'} h-9 rounded-md text-[11px] font-semibold text-slate-900 ${isActive ? 'ring-2 ring-white' : ''}`}
                               style={{ background: color ?? 'rgba(148,163,184,.15)' }}
                             >
                               {c.score != null ? c.score.toFixed(0) : ''}
@@ -713,7 +831,7 @@ export default function RoadWeather() {
           {active && (
             <section className="mt-10">
               <h2 className="text-xl font-semibold mb-1 flex items-center gap-2.5">
-                <RouteTag index={routeIdx} /> {fmtDay(active.row.date)}, leaving {fmtHour(active.cell.hour)}
+                <RouteTag index={routeIdx} /> {fmtDay(active.row.date)}, leaving {fmtMin(active.cell.min)}
               </h2>
               <p className="text-sm text-slate-300 mb-4">Places in driving order, with the forecast for when you'll be there.</p>
               <div className="rounded-2xl bg-slate-700/60 border border-white/10 divide-y divide-white/10">
