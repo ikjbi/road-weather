@@ -3,7 +3,7 @@
 //
 //   Geocoding  – Photon (komoot), OpenStreetMap data, with Open-Meteo's
 //                place search as a fallback. Photon also names the towns
-//                along the route, with BigDataCloud as a fallback.
+//                along the route.
 //   Routing    – OSRM public demo server
 //   Weather    – MET Norway (the data behind yr.no), SMHI snow1g, and
 //                Open-Meteo (its own blend plus ECMWF, DWD ICON, NOAA GFS)
@@ -92,28 +92,14 @@ async function nearestPlace(lat, lon, tags, radiusKm, townKm = 0) {
   return cleanName((town ?? places[0])?.properties.name)
 }
 
-// Municipality-level fallback for when Photon is busy.
-async function municipality(lat, lon) {
-  const res = await fetch(
-    `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=sv`,
-  )
-  const d = await res.json()
-  // Keep "kommun": the genitive form ("Tierps kommun") can't be safely trimmed.
-  return d.locality || d.city || null
-}
-
 // Name for a point: a town within 10 km, else the nearest village, else
 // whatever settlement is closest. One request in the common case — Photon
-// takes about a second.
+// takes about a second. Throws when Photon is unavailable.
 export async function reverseGeocode(lat, lon) {
-  try {
-    return (
-      (await nearestPlace(lat, lon, ['city', 'town', 'village'], 12, 10)) ||
-      (await nearestPlace(lat, lon, ['hamlet', 'locality'], 15))
-    )
-  } catch {
-    return municipality(lat, lon).catch(() => null)
-  }
+  return (
+    (await nearestPlace(lat, lon, ['city', 'town', 'village'], 12, 10)) ||
+    (await nearestPlace(lat, lon, ['hamlet', 'locality'], 15))
+  )
 }
 
 // ── Routing ──────────────────────────────────────────────────────────────
@@ -266,7 +252,12 @@ export async function nameWaypoints(waypoints, onUpdate) {
     if (w.name) return
     const key = cellKey(w)
     if (!nameCache.has(key)) nameCache.set(key, reverseGeocode(w.lat, w.lon))
-    names[i] = await nameCache.get(key)
+    try {
+      names[i] = await nameCache.get(key)
+    } catch {
+      // Photon is busy: show "Km N" for now, and try again on the next check.
+      nameCache.delete(key)
+    }
     if (onUpdate && ++pending % 4 === 0) onUpdate(build(false))
   })
   return build(true)
