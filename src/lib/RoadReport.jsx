@@ -45,7 +45,7 @@ function KeyForm({ rejected, onKey }) {
       <p>
         {rejected ? 'Trafikverket did not accept that key. ' : ''}
         Live road data needs a free key from{' '}
-        <a href="https://api.trafikinfo.trafikverket.se/" target="_blank" rel="noreferrer" className="text-sky-300 hover:text-sky-200">
+        <a href="https://data.trafikverket.se/get-started" target="_blank" rel="noreferrer" className="text-sky-300 hover:text-sky-200">
           Trafikverket's open API
         </a>
         . Register, create a key and paste it here. It's kept in this browser only.
@@ -159,9 +159,12 @@ export default function RoadReport({ route, waypoints, title }) {
 
           {data.stations.length > 0 && (
             <div className="overflow-x-auto rounded-2xl bg-slate-700/60 border border-white/10">
-              <h3 className="px-4 pt-3 font-semibold">Road weather stations</h3>
-              <table className="w-full text-sm mt-2">
-                <thead>
+              <h3 className="px-4 pt-3 font-semibold">
+                Road weather stations <span className="text-slate-400 font-normal text-sm">· {data.stations.length} along the route</span>
+              </h3>
+              <div className="max-h-[28rem] overflow-y-auto mt-2">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-700">
                   <tr className="text-left text-slate-300">
                     <th className="font-normal px-4 py-2">Station</th>
                     <th className="font-normal px-3 py-2 whitespace-nowrap">Road</th>
@@ -195,7 +198,8 @@ export default function RoadReport({ route, waypoints, title }) {
                   })}
                 </tbody>
               </table>
-              <p className="px-4 py-3 text-xs text-slate-400">
+              </div>
+              <p className="px-4 py-3 text-xs text-slate-400 border-t border-white/10">
                 Road temperatures at or below 0° are shown in blue. A wet road near 0° can freeze into black ice.
               </p>
             </div>

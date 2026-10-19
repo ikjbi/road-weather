@@ -25,7 +25,7 @@ you've switched to winter tyres.
    refreezing (black ice), snow, sleet near zero, frost on damp nights, strong gusts and fog
    score highest; darkness adds a little. Services are blended leaning towards the most
    pessimistic one.
-5. **Right now** (Sweden) — live from [Trafikverket's open API](https://api.trafikinfo.trafikverket.se/):
+5. **Right now** (Sweden) — live from [Trafikverket's open API](https://data.trafikverket.se/get-started):
    road surface temperatures measured at the roadside weather stations, road condition
    reports (slippery, ice and snow) and incidents along the chosen route.
 
@@ -66,7 +66,7 @@ your own copy for many people, please read their terms:
 - **MET Norway** — [terms of service](https://api.met.no/doc/TermsOfService); throttles bursts.
 - **Open-Meteo** — free for non-commercial use, [see terms](https://open-meteo.com/en/terms).
 - **SMHI** — open data, CC BY 4.0.
-- **Trafikverket** — free key per application; [open data terms](https://api.trafikinfo.trafikverket.se/).
+- **Trafikverket** — free key per application; [open data terms](https://data.trafikverket.se/get-started).
   A key built into the page is visible to anyone, so use one meant for that site.
 - **Map tiles** — OpenStreetMap's [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
 

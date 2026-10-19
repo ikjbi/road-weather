@@ -3,7 +3,7 @@
 // condition reports (slippery, ice, snow) and incidents such as accidents
 // and roadworks. Unlike the forecasts this is what is happening right now.
 //
-// It needs a free key from https://api.trafikinfo.trafikverket.se. Set it
+// It needs a free key from https://data.trafikverket.se/get-started. Set it
 // as VITE_TRAFIKVERKET_KEY when building, or paste one into the page.
 
 import { haversineKm } from './api'
@@ -73,6 +73,16 @@ const MESSAGE_TYPES = {
   Färjor: 'Ferries',
 }
 
+// Finer-grained than the message type; these read better as the label.
+const MESSAGE_CODES = {
+  'Djur på vägen': 'Animals on the road',
+  Körfältsavstängningar: 'Lane closures',
+  Beläggningsarbete: 'Resurfacing',
+  Sprängningsarbete: 'Blasting',
+}
+// Standing notices with no news in them.
+const SKIP_CODES = ['Hastighetsbegränsning gäller', 'Omkörning förbjuden']
+
 const PRECIPITATION = {
   rain: 'rain',
   freezing_rain: 'freezing rain',
@@ -81,7 +91,16 @@ const PRECIPITATION = {
   yes: 'precipitation',
 }
 
-const en = list => (list ?? []).map(w => WORDS[w] ?? w)
+// Entries can carry a time after the phrase ("Förebyggande halkbekämpning
+// 19 okt. 03:00-20 okt. 00:00"): translate the phrase, keep the time.
+const translate = w => {
+  if (WORDS[w]) return WORDS[w]
+  const phrase = Object.keys(WORDS)
+    .sort((a, b) => b.length - a.length)
+    .find(k => w.startsWith(`${k} `))
+  return phrase ? `${WORDS[phrase]} (${w.slice(phrase.length).trim()})` : w
+}
+const en = list => (list ?? []).map(translate)
 
 // ── Geometry ─────────────────────────────────────────────────────────────
 
@@ -107,10 +126,11 @@ function routeTrack(route) {
   return { flat, segs }
 }
 
-// Nearest point on the route: { dist, km }.
-function locate({ flat, segs }, p) {
+// Nearest point on the route within maxKm: { dist, km } (dist Infinity if
+// none is that close).
+function locate({ flat, segs }, p, maxKm = 5) {
   const [x, y] = flat(p)
-  let best = { dist: Infinity, km: 0 }
+  let best = { dist: maxKm, km: 0 }
   for (const s of segs) {
     // Cheap reject: more than the best distance so far north or south.
     if (y < s.minY - best.dist || y > s.maxY + best.dist) continue
@@ -118,31 +138,44 @@ function locate({ flat, segs }, p) {
     const dy = s.by - s.ay
     const t = dx || dy ? Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / (dx * dx + dy * dy))) : 0
     const d = Math.hypot(x - (s.ax + t * dx), y - (s.ay + t * dy))
-    if (d < best.dist) best = { dist: d, km: s.km + t * s.len }
+    if (d <= best.dist) best = { dist: d, km: s.km + t * s.len, hit: true }
   }
-  return best
+  return best.hit ? { dist: best.dist, km: best.km } : { dist: Infinity, km: 0 }
 }
 
-// For lines, the closest of their vertices (lines can be long, so a few
-// points in between too).
-function locateLine(track, points) {
-  let best = { dist: Infinity, km: 0 }
-  const dense = []
-  for (let i = 0; i < points.length; i++) {
-    dense.push(points[i])
-    const next = points[i + 1]
-    if (next) {
-      const steps = Math.min(60, Math.floor(haversineKm(points[i], next)))
-      for (let s = 1; s < steps; s++)
-        dense.push([points[i][0] + ((next[0] - points[i][0]) * s) / steps, points[i][1] + ((next[1] - points[i][1]) * s) / steps])
+// How much of a line runs along the route: { km, shared } where km is
+// where it starts on the route and shared is how many km of it lie within
+// 250 m of the road. A road that merely crosses the route shares about
+// half a kilometre, one that runs along it shares its whole length.
+function alongRoute(track, points) {
+  const STEP = 0.25
+  let shared = 0
+  let length = 0
+  let km = Infinity
+  const check = p => {
+    const hit = locate(track, p, 0.25)
+    if (hit.dist <= 0.25) {
+      shared += STEP
+      km = Math.min(km, hit.km)
     }
   }
-  for (const p of dense) {
-    const hit = locate(track, p)
-    if (hit.dist < best.dist) best = hit
+  if (points.length === 1) {
+    check(points[0])
+    return { km, shared, length: 0 }
   }
-  return best
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [a, b] = [points[i], points[i + 1]]
+    const len = haversineKm(a, b)
+    length += len
+    const steps = Math.min(400, Math.max(1, Math.round(len / STEP)))
+    for (let s = 0; s < steps; s++) check([a[0] + ((b[0] - a[0]) * s) / steps, a[1] + ((b[1] - a[1]) * s) / steps])
+  }
+  return { km, shared, length }
 }
+
+// On the route: a point right on the road, or a line with at least 1 km
+// of it (or most of a short one) along the road.
+const onRoute = ({ shared, length }) => (length === 0 ? shared > 0 : shared >= Math.min(1, length * 0.6))
 
 // Boxes around ~80 km stretches of the route, so a long trip asks for a
 // corridor rather than half of Sweden.
@@ -202,6 +235,7 @@ const DEVIATION_FIELDS = [
   'Deviation.Id',
   'Deviation.Header',
   'Deviation.Message',
+  'Deviation.MessageCode',
   'Deviation.MessageType',
   'Deviation.SeverityCode',
   'Deviation.SeverityText',
@@ -211,6 +245,7 @@ const DEVIATION_FIELDS = [
   'Deviation.EndTime',
   'Deviation.WebLink',
   'Deviation.Geometry.Point.WGS84',
+  'Deviation.Geometry.Line.WGS84',
 ]
 
 export class KeyError extends Error {}
@@ -227,7 +262,7 @@ export async function fetchRoadReport(route, key) {
     `<FILTER><EQ name="Deleted" value="false"/>${within('Geometry.WGS84', boxes)}</FILTER>${include(STATION_FIELDS)}</QUERY>` +
     `<QUERY objecttype="RoadCondition" schemaversion="1.2">` +
     `<FILTER><EQ name="Deleted" value="false"/>${within('Geometry.WGS84', boxes)}</FILTER>${include(CONDITION_FIELDS)}</QUERY>` +
-    `<QUERY objecttype="Situation" schemaversion="1.5">` +
+    `<QUERY objecttype="Situation" namespace="road.trafficinfo" schemaversion="1.6">` +
     `<FILTER><EQ name="Deleted" value="false"/>${within('Deviation.Geometry.Point.WGS84', boxes)}</FILTER>${include(DEVIATION_FIELDS)}</QUERY>` +
     `</REQUEST>`
 
@@ -279,17 +314,18 @@ export async function fetchRoadReport(route, key) {
       road: c.RoadNumber,
       location: c.LocationText,
       until: c.EndTime ? Date.parse(c.EndTime) : null,
-      ...locateLine(track, parseWkt(c.Geometry?.WGS84)),
+      ...alongRoute(track, parseWkt(c.Geometry?.WGS84)),
     }))
-    .filter(c => c.code >= 2 && c.dist <= 1.5 && (c.until == null || c.until > now))
+    .filter(c => c.code >= 2 && onRoute(c) && (c.until == null || c.until > now))
     .sort((a, b) => a.km - b.km)
 
   const incidents = situations
     .flatMap(s => s.Deviation ?? [])
     .map(d => ({
       id: d.Id,
-      type: MESSAGE_TYPES[d.MessageType] ?? d.MessageType ?? 'Traffic message',
-      roadworks: d.MessageType === 'Vägarbete',
+      type: MESSAGE_CODES[d.MessageCode] ?? MESSAGE_TYPES[d.MessageType] ?? d.MessageType ?? 'Traffic message',
+      code: d.MessageCode,
+      roadworks: d.MessageType === 'Vägarbete' || d.MessageCode === 'Körfältsavstängningar',
       header: d.Header,
       message: d.Message,
       severity: d.SeverityCode ?? 0,
@@ -299,12 +335,20 @@ export async function fetchRoadReport(route, key) {
       end: d.EndTime ? Date.parse(d.EndTime) : null,
       upcoming: d.StartTime ? Date.parse(d.StartTime) > now : false,
       link: d.WebLink,
-      ...locate(track, parseWkt(d.Geometry?.Point?.WGS84)[0] ?? [0, 0]),
+      ...alongRoute(track, parseWkt(d.Geometry?.Line?.WGS84 ?? d.Geometry?.Point?.WGS84)),
     }))
-    // On the road itself, current or starting within two days.
-    .filter(d => d.dist <= 1 && (d.end == null || d.end > now) && (d.start == null || d.start < now + 48 * 3600_000) && d.type !== 'Ferries')
-    // Several deviations can share one id across situations.
-    .filter((d, i, all) => all.findIndex(x => x.id === d.id) === i)
+    .filter(
+      d =>
+        onRoute(d) &&
+        d.type !== 'Ferries' &&
+        !SKIP_CODES.includes(d.code) &&
+        // Current, or starting within two days.
+        (d.end == null || d.end > now) &&
+        (d.start == null || d.start < now + 48 * 3600_000),
+    )
+    // One event is often published twice (as roadworks and as a traffic
+    // message) — keep the first.
+    .filter((d, i, all) => all.findIndex(x => x.id === d.id || (x.message && x.message === d.message)) === i)
     .sort((a, b) => a.km - b.km)
 
   return { stations, conditions, incidents, fetchedAt: now }
