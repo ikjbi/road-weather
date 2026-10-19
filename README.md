@@ -25,12 +25,16 @@ you've switched to winter tyres.
    refreezing (black ice), snow, sleet near zero, frost on damp nights, strong gusts and fog
    score highest; darkness adds a little. Services are blended leaning towards the most
    pessimistic one.
+5. **Right now** (Sweden) — live from [Trafikverket's open API](https://api.trafikinfo.trafikverket.se/):
+   road surface temperatures measured at the roadside weather stations, road condition
+   reports (slippery, ice and snow) and incidents along the chosen route.
 
-It's a guide for choosing a day, not a road-surface model — it can't see salting or
-ploughing. Check your road authority (in Sweden, [Trafikverket](https://www.trafikverket.se/trafikinformation/vag/))
-before you leave.
+The forecast part is a guide for choosing a day, not a road-surface model — it can't see
+salting or ploughing. The Trafikverket panel shows what is measured and reported now.
 
-Everything runs in the browser: no backend, no API keys.
+Everything runs in the browser, with no backend. Only the Trafikverket panel needs a key
+(free): put it in `.env.local` as `VITE_TRAFIKVERKET_KEY=…` before building, or paste it
+into the page, which keeps it in that browser. Without one the rest works as usual.
 
 ## Run it
 
@@ -48,6 +52,8 @@ npm run build    # static files in dist/
 | `src/lib/api.js` | Geocoding, routing, alternative routes, weather fetching and caching |
 | `src/lib/risk.js` | The risk model and trip scoring |
 | `src/lib/RouteMap.jsx` | Leaflet map with routes and stops |
+| `src/lib/trafikverket.js` | Live road status from Trafikverket, matched to the route |
+| `src/lib/RoadReport.jsx` | The "Right now on the road" panel |
 
 ## Using the free services fairly
 
@@ -60,6 +66,8 @@ your own copy for many people, please read their terms:
 - **MET Norway** — [terms of service](https://api.met.no/doc/TermsOfService); throttles bursts.
 - **Open-Meteo** — free for non-commercial use, [see terms](https://open-meteo.com/en/terms).
 - **SMHI** — open data, CC BY 4.0.
+- **Trafikverket** — free key per application; [open data terms](https://api.trafikinfo.trafikverket.se/).
+  A key built into the page is visible to anyone, so use one meant for that site.
 - **Map tiles** — OpenStreetMap's [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
 
 ## License

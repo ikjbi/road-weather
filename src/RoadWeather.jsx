@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import RoadReport from './lib/RoadReport'
 import RouteMap from './lib/RouteMap'
 import { letter, ROUTE_COLORS } from './lib/letter'
 import {
@@ -809,6 +810,19 @@ export default function RoadWeather() {
           </section>
           )}
 
+          {/* Live status from Trafikverket */}
+          <RoadReport
+            key={`${routeIdx}:${fetchedAt}`}
+            route={trip.route}
+            waypoints={trip.waypoints}
+            title={
+              <>
+                <RouteTag index={routeIdx} /> Right now on the road{' '}
+                {trips.length > 1 && <span className="text-slate-300 font-normal">· {routeName(routeIdx)}</span>}
+              </>
+            }
+          />
+
           {/* Day × departure time heatmap */}
           <section className="mt-10">
             <h2 className="text-xl font-semibold mb-1">Departure times</h2>
@@ -958,7 +972,7 @@ export default function RoadWeather() {
               before you leave.
             </p>
             <p className="text-xs text-slate-400">
-              Data: MET Norway (yr.no), SMHI, Open-Meteo (ECMWF, DWD, NOAA), OSRM and OpenStreetMap contributors.
+              Data: MET Norway (yr.no), SMHI, Open-Meteo (ECMWF, DWD, NOAA), Trafikverket, OSRM and OpenStreetMap contributors.
             </p>
           </section>
         </>
